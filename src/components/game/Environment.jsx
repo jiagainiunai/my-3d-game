@@ -90,9 +90,9 @@ export const Environment = React.memo(({ obstacles }) => {
         <hemisphereLight skyColor="#4466ff" groundColor="#111" intensity={0.4} />
         
         <Sky sunPosition={[-150, 250, 100]} turbidity={5} rayleigh={0.2} />
-        <Stars radius={400} depth={100} count={3000} factor={6} fade />
+        <Stars radius={400} depth={100} count={1500} factor={6} fade />
         
-        <ContactShadows resolution={1024} scale={1000} blur={2.5} opacity={0.6} far={20} color="#000" />
+        <ContactShadows resolution={512} scale={1000} blur={2.5} opacity={0.6} far={20} color="#000" />
 
         <Ground />
         <CenterFortress />
