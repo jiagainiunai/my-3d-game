@@ -5,9 +5,22 @@ import * as THREE from 'three';
 import { CONFIG, UNITS } from '../../config/constants';
 import { spawnSmoke, spawnFlame } from './VFX';
 
+// Pre-allocated reusable objects (avoid per-frame GC)
 const _tempVec = new THREE.Vector3();
 const _diff = new THREE.Vector3();
 const _targetPos = new THREE.Vector3();
+const _renderPos = new THREE.Vector3();
+const _recoilVec = new THREE.Vector3();
+const _smokePos = new THREE.Vector3();
+const _fireStartPos = new THREE.Vector3();
+const _fireTargetPos = new THREE.Vector3();
+const _flameStartPos = new THREE.Vector3();
+const _sniperStart = new THREE.Vector3();
+const _aimVec = new THREE.Vector3();
+const _targetQuat = new THREE.Quaternion();
+const _lookAtMatrix = new THREE.Matrix4();
+const _up = new THREE.Vector3(0, 1, 0);
+const _vOffset = new THREE.Vector3();
 
 // --- Logic Component ---
 const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire, onDeath, upgrades, obstacles }) => {
@@ -63,8 +76,11 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
         else ref.current.color.set(color);
         
         if (self.hp < self.maxHp * 0.4) {
-            if (Math.random() > (self.hp / (self.maxHp * 0.4)) && smokes && Math.random() > 0.8) 
-                spawnSmoke(smokes, self.pos.clone().add(new THREE.Vector3(0, 2, 0)), '#555', 0.5);
+            if (Math.random() > (self.hp / (self.maxHp * 0.4)) && smokes && Math.random() > 0.8) {
+                _smokePos.copy(self.pos);
+                _smokePos.y += 2;
+                spawnSmoke(smokes, _smokePos, '#555', 0.5);
+            }
         }
         if (self.recoil > 0) self.recoil = Math.max(0, self.recoil - delta * 5);
         self.cooldown -= delta;
@@ -77,10 +93,12 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             _tempVec.set(0,0,0);
             let sepCount = 0;
 
-            const allUnits = Object.values(registry.current);
+            const regEntries = registry.current;
+            const regKeys = Object.keys(regEntries);
             const aggroRange = 350; 
 
-            for (const other of allUnits) {
+            for (let ri = 0, rl = regKeys.length; ri < rl; ri++) {
+                const other = regEntries[regKeys[ri]];
                 if (other.id === id) continue;
                 const dx = self.pos.x - other.position.x;
                 const dz = self.pos.z - other.position.z;
@@ -110,13 +128,14 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             }
 
             if (obstacles) {
-                for(const obs of obstacles) {
+                for (let oi = 0, ol = obstacles.length; oi < ol; oi++) {
+                    const obs = obstacles[oi];
                     const dx = self.pos.x - obs.x;
                     const dz = self.pos.z - obs.z;
                     if (Math.abs(dx) > 50 && Math.abs(dz) > 50) continue;
                     const distSq = dx*dx + dz*dz;
                     const minD = stats.size + obs.r + 1;
-                    if(distSq < minD*minD) {
+                    if (distSq < minD * minD) {
                         const d = Math.sqrt(distSq);
                         _diff.set(dx, 0, dz).normalize().multiplyScalar((minD - d) * 5);
                         _tempVec.add(_diff);
@@ -126,7 +145,7 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             }
 
             self.separationForce.copy(_tempVec);
-            if(sepCount > 0) self.separationForce.normalize().multiplyScalar(stats.speed * 1.5);
+            if (sepCount > 0) self.separationForce.normalize().multiplyScalar(stats.speed * 1.5);
             
             if (target && !registry.current[target.id]) target = null;
             self.currentTarget = target;
@@ -152,7 +171,7 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             if (inRange && self.cooldown <= 0.2) {
                 isAttacking = true;
                 // Force Stop
-                internal.current.velocity.set(0,0,0); 
+                internal.current.velocity.set(0, 0, 0); 
                 
                 // Fire Logic
                 if (self.cooldown <= 0) {
@@ -168,20 +187,32 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
                                 onFire(type, self.pos, target.position, color, 0, 0);
                             }
                         } else {
-                            if (snipers && snipers.current) snipers.current.push({ start: self.pos.clone().add(new THREE.Vector3(0,2,0)), end: target.position.clone(), active: 0.1 });
+                            if (snipers && snipers.current) {
+                                _sniperStart.copy(self.pos);
+                                _sniperStart.y += 2;
+                                snipers.current.push({ start: _sniperStart.clone(), end: target.position.clone(), active: 0.1 });
+                            }
                         }
                     } else if (type === 'flamebat') {
                         self.cooldown = stats.cooldown;
-                        if (flames) spawnFlame(flames, self.pos.clone().add(new THREE.Vector3(0,1,0)), target.position);
+                        if (flames) {
+                            _flameStartPos.copy(self.pos);
+                            _flameStartPos.y += 1;
+                            spawnFlame(flames, _flameStartPos, target.position);
+                        }
                         if (registry.current[target.id]) registry.current[target.id].damage(stats.damage);
                     } else {
                         // Projectile Units
                         self.cooldown = stats.cooldown;
                         self.recoil = 1.5; // Strong recoil visual
-                        const startPos = self.pos.clone().add(new THREE.Vector3(0, 3, 0));
+                        _fireStartPos.copy(self.pos);
+                        _fireStartPos.y += 3;
+                        const startPos = _fireStartPos.clone();
                         if (type === 'artillery') {
-                            for(let i=0; i<4; i++) {
-                                setTimeout(() => { if(internal.current.hp > 0) onFire(type, startPos, target.position.clone().add(new THREE.Vector3((Math.random()-0.5)*5,0,0)), color, stats.damage/4, stats.aoe); }, i * 100);
+                            for (let ai = 0; ai < 4; ai++) {
+                                const artTarget = target.position.clone();
+                                artTarget.x += (Math.random() - 0.5) * 5;
+                                setTimeout(() => { if (internal.current.hp > 0) onFire(type, startPos, artTarget, color, stats.damage / 4, stats.aoe); }, ai * 100);
                             }
                         } else {
                             onFire(type, startPos, target.position.clone(), color, stats.damage, stats.aoe);
@@ -206,7 +237,8 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
                  _targetPos.set(self.waypoint.x, 0, desiredZ);
                  _tempVec.copy(_targetPos).sub(self.pos).normalize().multiplyScalar(stats.speed);
                  internal.current.velocity.lerp(_tempVec, 0.1); 
-                 aimTarget = self.pos.clone().add(internal.current.velocity);
+                 _aimVec.copy(self.pos).add(internal.current.velocity);
+                 aimTarget = _aimVec;
                  isMoving = true;
             }
         }
@@ -226,25 +258,23 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
 
         // Update Visuals
         if (ref.current) {
-            const renderPos = self.pos.clone();
-            
+            _renderPos.copy(self.pos);
+
             // Visual Recoil
             if (self.recoil > 0 && aimTarget) {
-                const back = new THREE.Vector3().subVectors(self.pos, aimTarget).normalize().multiplyScalar(self.recoil);
-                renderPos.add(back);
+                _recoilVec.subVectors(self.pos, aimTarget).normalize().multiplyScalar(self.recoil);
+                _renderPos.add(_recoilVec);
             }
-            ref.current.position.copy(renderPos);
-            
-            // Rotation Logic
+            ref.current.position.copy(_renderPos);
+
+            // Rotation Logic - use quaternion math instead of cloning Object3D
             if (aimTarget) {
-                // Slerp rotation
-                const dummy = ref.current.clone(); 
-                dummy.position.copy(ref.current.position);
-                dummy.lookAt(aimTarget.x, 0, aimTarget.z);
-                
-                // If moving, slow turn. If attacking (locked on), fast turn/snap.
+                _targetPos.set(aimTarget.x, 0, aimTarget.z);
+                _lookAtMatrix.lookAt(ref.current.position, _targetPos, _up);
+                _targetQuat.setFromRotationMatrix(_lookAtMatrix);
+
                 const turnSpeed = isAttacking ? 0.3 : 0.1;
-                ref.current.quaternion.slerp(dummy.quaternion, turnSpeed); 
+                ref.current.quaternion.slerp(_targetQuat, turnSpeed);
             }
             
             // Sync registry quaternion for parts
@@ -291,9 +321,10 @@ const VisualPart = ({ u, registry, offset }) => {
             ref.current.visible = true;
             ref.current.position.copy(data.position);
             if (data.quaternion) ref.current.quaternion.copy(data.quaternion);
-            const vOffset = new THREE.Vector3(...offset);
-            vOffset.applyQuaternion(ref.current.quaternion);
-            ref.current.position.add(vOffset);
+            // Reuse pre-allocated vector instead of creating new Vector3 every frame
+            _vOffset.set(offset[0], offset[1], offset[2]);
+            _vOffset.applyQuaternion(ref.current.quaternion);
+            ref.current.position.add(_vOffset);
         } else if (ref.current) {
             ref.current.visible = false;
         }
@@ -309,6 +340,8 @@ export const UnitGroup = ({ type, units, registry, smokes, flames, snipers, onFi
     const thorBody = useMemo(() => new THREE.BoxGeometry(4, 5, 3), []);
     const turretGeo = useMemo(() => new THREE.CylinderGeometry(1, 1.5, 4, 8), []);
     const gunGeo = useMemo(() => new THREE.BoxGeometry(1, 1, 3), []);
+    // Fix: memoize flamebat weapon geometry instead of creating inline every render
+    const flamebatWeaponGeo = useMemo(() => new THREE.BoxGeometry(0.5, 1, 1), []);
 
     return (
         <>
@@ -334,7 +367,7 @@ export const UnitGroup = ({ type, units, registry, smokes, flames, snipers, onFi
             )}
 
             {type === 'flamebat' && (
-                <Instances range={500} geometry={new THREE.BoxGeometry(0.5, 1, 1)} castShadow frustumCulled={false}>
+                <Instances range={500} geometry={flamebatWeaponGeo} castShadow frustumCulled={false}>
                     <meshStandardMaterial color="#ff5500" />
                     {units.map(u => <VisualPart key={u.id} u={u} registry={registry} offset={[0.8, 0.5, 0.5]} />)}
                 </Instances>

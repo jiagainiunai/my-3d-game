@@ -15,16 +15,20 @@ import {
   VFXSystem, OrbitalStrike, spawnDebris, spawnExplosion, spawnDecal, spawnTracer
 } from './components/game/VFX';
 
+// Pre-allocated ground plane for cursor raycasting (avoids raycasting ALL scene children)
+const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const _intersectPoint = new THREE.Vector3();
+
 const GroundCursor = ({ radius, color }) => {
-    const { raycaster, mouse, camera, scene } = useThree();
+    const { raycaster, mouse, camera } = useThree();
     const ref = useRef();
     useFrame(() => {
         if (!ref.current) return;
         raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObjects(scene.children);
-        if (intersects.length > 0) {
-             ref.current.position.copy(intersects[0].point);
-             ref.current.position.y = 0.5;
+        // Raycast only against ground plane instead of all scene children
+        if (raycaster.ray.intersectPlane(_groundPlane, _intersectPoint)) {
+            ref.current.position.copy(_intersectPoint);
+            ref.current.position.y = 0.5;
         }
     });
     return (
@@ -107,25 +111,30 @@ export default function App() {
         spawnTracer(tracers, start, target, color);
         spawnExplosion(explosions, target, color, 1);
         const hitRadiusSq = 4*4;
-        const targets = Object.values(registry.current);
+        const regEntries = registry.current;
+        const keys = Object.keys(regEntries);
         const attackerTeam = color === CONFIG.red.color ? 'red' : 'blue';
-        for(const u of targets) {
+        for (let i = 0, l = keys.length; i < l; i++) {
+            const u = regEntries[keys[i]];
             if (u.team !== attackerTeam && u.position.distanceToSquared(target) < hitRadiusSq) {
-                if(u.damage) u.damage(damage);
+                if (u.damage) u.damage(damage);
                 break;
             }
         }
     }
   }, []);
 
-  const handleExplode = (pos, radius, damage, teamColor) => {
+  const handleExplode = useCallback((pos, radius, damage, teamColor) => {
       const r2 = radius * radius;
-      const attackerTeam = teamColor; 
-      Object.values(registry.current).forEach(u => {
+      const attackerTeam = teamColor;
+      const regEntries = registry.current;
+      const keys = Object.keys(regEntries);
+      for (let i = 0, l = keys.length; i < l; i++) {
+          const u = regEntries[keys[i]];
           if (u.team !== attackerTeam && u.position.distanceToSquared(pos) <= r2) u.damage(damage);
-      });
+      }
       spawnExplosion(explosions, pos, attackerTeam==='red'?CONFIG.red.color:CONFIG.blue.color, radius);
-  };
+  }, []);
 
   const handleDeath = useCallback((id, pos, color) => {
       setUnits(p => p.filter(u => u.id !== id));
@@ -136,9 +145,19 @@ export default function App() {
       spawnDecal(decals, pos, 4);
   }, []);
 
+  // Pre-filter units by type to avoid repeated .filter() calls in render
+  const unitsByType = useMemo(() => {
+      const result = { tank: [], ranger: [], artillery: [], flamebat: [], ghost: [] };
+      for (let i = 0; i < units.length; i++) {
+          const u = units[i];
+          if (result[u.type]) result[u.type].push(u);
+      }
+      return result;
+  }, [units]);
+
   const renderUnitGroup = (type) => (
       <UnitGroup 
-          key={type} type={type} units={units.filter(u => u.type === type)} 
+          key={type} type={type} units={unitsByType[type]} 
           registry={registry} smokes={smokes} flames={flames} snipers={snipers}
           onFire={handleFire} onDeath={handleDeath} upgrades={tech} 
           obstacles={obstacles}
