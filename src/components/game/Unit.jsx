@@ -127,8 +127,9 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             }
 
             // Query nearby obstacles using spatial hash
+            // Max obstacle radius is 18 (mountain), unit max size is 4.5
             if (obstacleHash) {
-                const nearbyObs = obstacleHash.query(self.pos.x, self.pos.z, 50);
+                const nearbyObs = obstacleHash.query(self.pos.x, self.pos.z, 30); // 30 is enough to catch largest obstacle center + unit
                 for (let oi = 0, ol = nearbyObs.length; oi < ol; oi++) {
                     const obs = nearbyObs[oi];
                     const dx = self.pos.x - obs.x;
@@ -137,7 +138,10 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
                     const minD = stats.size + obs.r + 1;
                     if (distSq < minD * minD) {
                         const d = Math.sqrt(distSq);
-                        _diff.set(dx, 0, dz).normalize().multiplyScalar((minD - d) * 5);
+                        // Much stronger push back for obstacles to prevent walking through
+                        // Exponentially stronger the closer they get
+                        const pushFactor = Math.pow(minD - d, 2) * 2;
+                        _diff.set(dx, 0, dz).normalize().multiplyScalar(pushFactor);
                         _tempVec.add(_diff);
                         sepCount++;
                     }
@@ -145,7 +149,9 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             }
 
             self.separationForce.copy(_tempVec);
-            if (sepCount > 0) self.separationForce.normalize().multiplyScalar(stats.speed * 1.5);
+            if (sepCount > 0) {
+                self.separationForce.normalize().multiplyScalar(stats.speed * 2.5); // increased base separation force
+            }
             
             if (target && !registry.current[target.id]) target = null;
             self.currentTarget = target;
@@ -247,7 +253,7 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
         // But if attacking (stationary), reduce separation effect to prevent jitter while shooting?
         // No, we want them to be pushed if overlapping.
         if (self.separationForce.lengthSq() > 0.01) {
-            internal.current.velocity.add(self.separationForce.multiplyScalar(0.2));
+            internal.current.velocity.add(self.separationForce.multiplyScalar(0.4)); // doubled multiplier for stronger separation
             isMoving = true;
         }
 
@@ -255,6 +261,28 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
         // If attacking, velocity was force-set to 0, but separation might add some back.
         // We allow separation to push attacking units slowly (sliding).
         self.pos.addScaledVector(internal.current.velocity, delta);
+
+        // Strict Position Clamping against obstacles
+        // Even with strong separation forces, high velocity might make them clip.
+        // This acts as a hard boundary check.
+        if (obstacleHash) {
+            const nearbyObs = obstacleHash.query(self.pos.x, self.pos.z, 25);
+            for (let i = 0; i < nearbyObs.length; i++) {
+                const obs = nearbyObs[i];
+                const dx = self.pos.x - obs.x;
+                const dz = self.pos.z - obs.z;
+                const distSq = dx*dx + dz*dz;
+                const minD = stats.size + obs.r; // slightly tighter than separation check
+
+                if (distSq < minD * minD && distSq > 0.001) {
+                    // Hard clamp
+                    const d = Math.sqrt(distSq);
+                    const overlap = minD - d;
+                    self.pos.x += (dx / d) * overlap;
+                    self.pos.z += (dz / d) * overlap;
+                }
+            }
+        }
 
         // Update Visuals
         if (ref.current) {

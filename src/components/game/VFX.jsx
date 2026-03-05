@@ -77,8 +77,8 @@ const ProjectileInstances = ({ maxCount = 500, geometry, material, projectilesRe
             let hit = false;
 
             // Environment collision
-            if (obstacleHash && _pos.y < 5) {
-                const nearbyObs = obstacleHash.query(_pos.x, _pos.z, 5);
+            if (obstacleHash && _pos.y < 18) { // Max obstacle height roughly matches its radius
+                const nearbyObs = obstacleHash.query(_pos.x, _pos.z, 20); // 18 max radius + 2 margin
                 for (let oi = 0, ol = nearbyObs.length; oi < ol; oi++) {
                     const obs = nearbyObs[oi];
                     const dx = Math.abs(_pos.x - obs.x);
