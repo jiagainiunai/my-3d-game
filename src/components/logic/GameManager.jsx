@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { CONFIG, UNITS } from '../../config/constants';
 
-export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, skillCdTimer, aiTimer, spawnUnit, autoMode, money, handleUpgrade, setGameTime }) => {
+export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, skillCdTimer, aiTimer, spawnUnit, autoMode, money, handleUpgrade, setGameTime, registry, unitHash }) => {
   // AI State
   const redMoney = useRef(CONFIG.startMoney);
   const aiTimerRef = useRef(0); 
@@ -14,6 +14,17 @@ export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, sk
 
   useFrame((_, delta) => {
       if (gameState !== 'playing') return;
+
+      // 0. Update Unit Spatial Hash
+      unitHash.clear();
+      const regEntries = registry.current;
+      const keys = Object.keys(regEntries);
+      for (let i = 0, l = keys.length; i < l; i++) {
+          const u = regEntries[keys[i]];
+          if (u.position) {
+              unitHash.insert(u.id, u, u.position.x, u.position.z);
+          }
+      }
 
       // 1. GLOBAL ECONOMY & TIME
       gameTimeRef.current += delta;
@@ -82,7 +93,7 @@ export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, sk
       // 2. RED AI (Enemy) - Swarm Mode
       aiTimerRef.current += delta;
       // Think faster as game progresses
-      const thinkTime = Math.max(0.1, 1.0 - timeSec / 300); 
+      const thinkTime = Math.max(0.05, 1.0 - timeSec / 300);
       
       if (aiTimerRef.current > thinkTime) { 
           aiTimerRef.current = 0;
@@ -90,7 +101,8 @@ export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, sk
           // Spend ALL money
           // Cap loop to prevent freeze if money is infinite
           let loopGuard = 0;
-          while (redMoney.current > 200 && loopGuard < 10) {
+          const maxSpawnsPerTick = timeSec > 240 ? 30 : 10;
+          while (redMoney.current > 200 && loopGuard < maxSpawnsPerTick) {
               const type = pickUnit();
               const cost = UNITS[type].cost;
               if (redMoney.current >= cost) {
@@ -103,15 +115,20 @@ export const GameManager = ({ gameState, setMoney, skillReady, setSkillReady, sk
 
       // 3. BLUE AI (Auto Mode)
       if (autoMode) {
-          // Check frequently
-          if (Math.random() < 0.2) { 
-              // Try to buy expensive stuff first
-              const type = pickUnit();
-              const cost = UNITS[type].cost;
+          if (Math.random() < 0.8) {
+              let loopGuard = 0;
+              const maxSpawnsPerTick = timeSec > 240 ? 30 : 10;
               
-              if (money >= cost) {
-                  setMoney(m => m - cost);
-                  spawnUnit('blue', type);
+              while (money > 200 && loopGuard < maxSpawnsPerTick) {
+                  const type = pickUnit();
+                  const cost = UNITS[type].cost;
+
+                  if (money >= cost) {
+                      setMoney(m => m - cost);
+                      spawnUnit('blue', type);
+                      money -= cost;
+                  }
+                  loopGuard++;
               }
 
               // Auto Upgrade if super rich

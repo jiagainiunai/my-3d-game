@@ -8,7 +8,7 @@ import { CONFIG } from '../../config/constants';
 const baseGeo = new THREE.CylinderGeometry(6, 7, 2, 6);
 const barrelGeo = new THREE.CylinderGeometry(0.3, 0.3, 4);
 
-export const Nexus = ({ team, registry, onFire, onDamage, onDeath }) => {
+export const Nexus = ({ team, registry, unitHash, onFire, onDamage, onDeath }) => {
   const conf = team === 'red' ? CONFIG.red : CONFIG.blue;
   const hp = useRef(CONFIG.baseHp);
   const group = useRef();
@@ -42,22 +42,23 @@ export const Nexus = ({ team, registry, onFire, onDamage, onDeath }) => {
       if (hp.current <= 0) return;
       cooldown.current -= delta;
       
-      if (cooldown.current <= 0) {
-          const rangeSq = CONFIG.baseRange * CONFIG.baseRange;
+      if (cooldown.current <= 0 && unitHash) {
           const nexusPos = new THREE.Vector3(conf.pos, 2, 0);
           
-          const targets = Object.values(registry.current).filter(u => 
-              u.team !== team && 
-              u.position.distanceToSquared(nexusPos) < rangeSq
-          );
+          const targets = unitHash.query(nexusPos.x, nexusPos.z, CONFIG.baseRange);
+          const enemyTargets = targets.filter(u => u.team !== team);
           
-          if (targets.length > 0) {
-              const target = targets.reduce((prev, curr) => 
-                  prev.position.distanceToSquared(nexusPos) < curr.position.distanceToSquared(nexusPos) ? prev : curr
-              );
+          if (enemyTargets.length > 0) {
+              const target = enemyTargets.reduce((prev, curr) => {
+                  const pPos = prev.position || prev;
+                  const cPos = curr.position || curr;
+                  return pPos.distanceToSquared(nexusPos) < cPos.distanceToSquared(nexusPos) ? prev : curr;
+              });
+
+              const targetPos = target.position || target;
               
               if (turretRef.current) {
-                  turretRef.current.lookAt(target.position.x, 2, target.position.z);
+                  turretRef.current.lookAt(targetPos.x, 2, targetPos.z);
               }
               
               cooldown.current = 0.15; 
@@ -66,7 +67,7 @@ export const Nexus = ({ team, registry, onFire, onDamage, onDeath }) => {
               const offset = Math.random() > 0.5 ? 0.5 : -0.5; 
               const nozzlePos = new THREE.Vector3(offset, 0, 4).applyMatrix4(turretRef.current.matrixWorld);
               
-              onFire('turret', nozzlePos, target.position.clone(), conf.color, 25, 0); 
+              onFire('turret', nozzlePos, targetPos.clone(), conf.color, 25, 0);
           }
       }
   });
