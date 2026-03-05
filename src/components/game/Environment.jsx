@@ -60,7 +60,7 @@ const EnvironmentInstances = ({ obstacles }) => {
                 <meshStandardMaterial 
                     color="#00eeff" 
                     emissive="#0066aa" 
-                    emissiveIntensity={1} 
+                    emissiveIntensity={4}
                     roughness={0.1} 
                     metalness={0.9} 
                 />

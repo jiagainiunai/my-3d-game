@@ -11,6 +11,8 @@ import { GameUI } from './components/ui/GameUI';
 import { UnitGroup } from './components/game/Unit';
 import { Nexus } from './components/game/Nexus';
 import { Environment } from './components/game/Environment';
+import { SpatialHash } from './components/logic/SpatialHash';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { 
   VFXSystem, OrbitalStrike, spawnDebris, spawnExplosion, spawnDecal, spawnTracer
 } from './components/game/VFX';
@@ -54,6 +56,16 @@ export default function App() {
   // Generate Map Data (350 objects for heavy coverage)
   const obstacles = useMemo(() => generateObstacles(CONFIG.mapSize, 350), [gameKey]);
 
+  // Create static obstacle spatial hash
+  const obstacleHash = useMemo(() => {
+    const hash = new SpatialHash(50);
+    obstacles.forEach((obs, i) => hash.insert(`obs_${i}`, obs, obs.x, obs.z));
+    return hash;
+  }, [obstacles]);
+
+  // Create dynamic unit spatial hash
+  const unitHash = useMemo(() => new SpatialHash(50), []);
+
   const [units, setUnits] = useState([]);
   const [skillActive, setSkillActive] = useState(false); 
   const [orbitalStrike, setOrbitalStrike] = useState(null); 
@@ -93,9 +105,9 @@ export default function App() {
       setOrbitalStrike({ active: true, pos: point });
       setTimeout(() => setOrbitalStrike(null), 4000); 
       setTimeout(() => {
-          const r2 = CONFIG.skill.radius * CONFIG.skill.radius;
-          Object.values(registry.current).forEach(u => {
-              if (u.team === 'red' && u.position.distanceToSquared(point) <= r2) u.damage(CONFIG.skill.damage);
+          const targets = unitHash.query(point.x, point.z, CONFIG.skill.radius);
+          targets.forEach(u => {
+              if (u.team === 'red') u.damage(CONFIG.skill.damage);
           });
       }, 2000);
   };
@@ -110,31 +122,26 @@ export default function App() {
     } else {
         spawnTracer(tracers, start, target, color);
         spawnExplosion(explosions, target, color, 1);
-        const hitRadiusSq = 4*4;
-        const regEntries = registry.current;
-        const keys = Object.keys(regEntries);
+        const hitRadius = 4;
         const attackerTeam = color === CONFIG.red.color ? 'red' : 'blue';
-        for (let i = 0, l = keys.length; i < l; i++) {
-            const u = regEntries[keys[i]];
-            if (u.team !== attackerTeam && u.position.distanceToSquared(target) < hitRadiusSq) {
+        const targets = unitHash.query(target.x, target.z, hitRadius);
+        for (const u of targets) {
+            if (u.team !== attackerTeam) {
                 if (u.damage) u.damage(damage);
                 break;
             }
         }
     }
-  }, []);
+  }, [unitHash]);
 
   const handleExplode = useCallback((pos, radius, damage, teamColor) => {
-      const r2 = radius * radius;
       const attackerTeam = teamColor;
-      const regEntries = registry.current;
-      const keys = Object.keys(regEntries);
-      for (let i = 0, l = keys.length; i < l; i++) {
-          const u = regEntries[keys[i]];
-          if (u.team !== attackerTeam && u.position.distanceToSquared(pos) <= r2) u.damage(damage);
+      const targets = unitHash.query(pos.x, pos.z, radius);
+      for (const u of targets) {
+          if (u.team !== attackerTeam && u.damage) u.damage(damage);
       }
       spawnExplosion(explosions, pos, attackerTeam==='red'?CONFIG.red.color:CONFIG.blue.color, radius);
-  }, []);
+  }, [unitHash]);
 
   const handleDeath = useCallback((id, pos, color) => {
       setUnits(p => p.filter(u => u.id !== id));
@@ -160,7 +167,7 @@ export default function App() {
           key={type} type={type} units={unitsByType[type]} 
           registry={registry} smokes={smokes} flames={flames} snipers={snipers}
           onFire={handleFire} onDeath={handleDeath} upgrades={tech} 
-          obstacles={obstacles}
+          obstacles={obstacles} obstacleHash={obstacleHash} unitHash={unitHash}
       />
   );
 
@@ -187,6 +194,7 @@ export default function App() {
             setSkillReady={setSkillReady} skillCdTimer={skillCdTimer} aiTimer={aiTimer}
             spawnUnit={spawnUnit} autoMode={autoMode}
             money={money} handleUpgrade={handleUpgrade} setGameTime={setGameTime}
+            registry={registry} unitHash={unitHash}
         />
 
         <Environment obstacles={obstacles} />
@@ -197,8 +205,8 @@ export default function App() {
         {skillActive && <GroundCursor radius={CONFIG.skill.radius} color={CONFIG.blue.color} />}
         <OrbitalStrike {...orbitalStrike} color={CONFIG.blue.color} decals={decals} explosions={explosions} />
 
-        <Nexus team="red" registry={registry} onFire={handleFire} onDamage={(t, hp) => setBaseHp(p => ({...p, [t]: hp}))} onDeath={() => setGameState('ended')} />
-        <Nexus team="blue" registry={registry} onFire={handleFire} onDamage={(t, hp) => setBaseHp(p => ({...p, [t]: hp}))} onDeath={() => setGameState('ended')} />
+        <Nexus team="red" registry={registry} unitHash={unitHash} onFire={handleFire} onDamage={(t, hp) => setBaseHp(p => ({...p, [t]: hp}))} onDeath={() => setGameState('ended')} />
+        <Nexus team="blue" registry={registry} unitHash={unitHash} onFire={handleFire} onDamage={(t, hp) => setBaseHp(p => ({...p, [t]: hp}))} onDeath={() => setGameState('ended')} />
 
         {renderUnitGroup('tank')}
         {renderUnitGroup('ranger')}
@@ -208,10 +216,14 @@ export default function App() {
 
         <VFXSystem 
             projectiles={projectiles} debris={debris} smokes={smokes} flames={flames} explosions={explosions} decals={decals} snipers={snipers} tracers={tracers}
-            onExplode={handleExplode} registry={registry} obstacles={obstacles}
+            onExplode={handleExplode} registry={registry} obstacles={obstacles} obstacleHash={obstacleHash} unitHash={unitHash}
         />
         
-        <OrbitControls maxPolarAngle={Math.PI/2.1} minDistance={50} maxDistance={800} enablePan={true} />
+        <OrbitControls maxPolarAngle={Math.PI/2.1} minDistance={50} maxDistance={800} enablePan={true} autoRotate={autoMode && gameState === 'playing'} autoRotateSpeed={0.2} />
+
+        <EffectComposer>
+          <Bloom luminanceThreshold={1} luminanceSmoothing={0.9} height={300} intensity={1.5} />
+        </EffectComposer>
       </Canvas>
     </div>
   );

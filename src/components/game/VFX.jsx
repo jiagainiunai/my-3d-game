@@ -56,7 +56,7 @@ const ParticleInstances = ({ maxCount = 1000, geometry, material, particlesRef }
 // Pre-allocated smoke color for projectile trails
 const _smokeGray = new THREE.Color(0x888888);
 
-const ProjectileInstances = ({ maxCount = 200, geometry, material, projectilesRef, smokesRef, explosionsRef, decalsRef, onExplode, registry, obstacles }) => {
+const ProjectileInstances = ({ maxCount = 500, geometry, material, projectilesRef, smokesRef, explosionsRef, decalsRef, onExplode, registry, obstacles, obstacleHash, unitHash }) => {
     const meshRef = useRef();
 
     useFrame((_, delta) => {
@@ -76,16 +76,13 @@ const ProjectileInstances = ({ maxCount = 200, geometry, material, projectilesRe
 
             let hit = false;
 
-            // Environment collision - with early-exit distance check
-            if (obstacles) {
-                for (let oi = 0, ol = obstacles.length; oi < ol; oi++) {
-                    const obs = obstacles[oi];
+            // Environment collision
+            if (obstacleHash && _pos.y < 5) {
+                const nearbyObs = obstacleHash.query(_pos.x, _pos.z, 5);
+                for (let oi = 0, ol = nearbyObs.length; oi < ol; oi++) {
+                    const obs = nearbyObs[oi];
                     const dx = Math.abs(_pos.x - obs.x);
                     const dz = Math.abs(_pos.z - obs.z);
-
-                    // Early exit: skip obstacles clearly out of range
-                    const maxR = obs.r + 2;
-                    if (dx > maxR || dz > maxR) continue;
 
                     if (obs.type === 'ruin') {
                         if (dx < obs.r && dz < obs.r && _pos.y < 5) {
@@ -99,12 +96,11 @@ const ProjectileInstances = ({ maxCount = 200, geometry, material, projectilesRe
                 }
             }
 
-            if (!hit && t > 0.5) {
-                const regEntries = registry.current;
-                const keys = Object.keys(regEntries);
-                for (let ki = 0, kl = keys.length; ki < kl; ki++) {
-                    const u = regEntries[keys[ki]];
-                    if (u.team !== p.team && _pos.distanceToSquared(u.position) < (u.size + 1) ** 2) {
+            if (!hit && t > 0.5 && unitHash) {
+                const nearbyUnits = unitHash.query(_pos.x, _pos.z, 3);
+                for (let ki = 0, kl = nearbyUnits.length; ki < kl; ki++) {
+                    const u = nearbyUnits[ki];
+                    if (u.team !== p.team && _pos.distanceToSquared(u.position || u) < (u.size + 1) ** 2) {
                         hit = true; if (u.damage) u.damage(p.damage); break;
                     }
                 }
@@ -240,7 +236,7 @@ const DecalSystem = ({ decals }) => {
     return <instancedMesh ref={meshRef} args={[geo, mat, 500]} frustumCulled={false} position={[0, 0.05, 0]} />;
 }
 
-export const VFXSystem = ({ projectiles, debris, smokes, flames, explosions, decals, snipers, tracers, onExplode, registry, obstacles }) => {
+export const VFXSystem = ({ projectiles, debris, smokes, flames, explosions, decals, snipers, tracers, onExplode, registry, obstacles, obstacleHash, unitHash }) => {
     const smokeGeo = useMemo(() => new THREE.DodecahedronGeometry(0.5, 0), []);
     const smokeMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#fff', transparent: true, opacity: 0.5 }), []);
     const debrisGeo = useMemo(() => new THREE.BoxGeometry(0.5, 0.5, 0.5), []);
@@ -254,11 +250,11 @@ export const VFXSystem = ({ projectiles, debris, smokes, flames, explosions, dec
 
     return (
         <group>
-            <ProjectileInstances geometry={projGeo} material={projMat} projectilesRef={projectiles} smokesRef={smokes} explosionsRef={explosions} decalsRef={decals} onExplode={onExplode} registry={registry} obstacles={obstacles} />
-            <ParticleInstances maxCount={1000} geometry={smokeGeo} material={smokeMat} particlesRef={smokes} />
-            <ParticleInstances maxCount={500} geometry={debrisGeo} material={debrisMat} particlesRef={debris} />
-            <ParticleInstances maxCount={100} geometry={expGeo} material={expMat} particlesRef={explosions} />
-            <ParticleInstances maxCount={1000} geometry={flameGeo} material={flameMat} particlesRef={flames} />
+            <ProjectileInstances maxCount={500} geometry={projGeo} material={projMat} projectilesRef={projectiles} smokesRef={smokes} explosionsRef={explosions} decalsRef={decals} onExplode={onExplode} registry={registry} obstacles={obstacles} obstacleHash={obstacleHash} unitHash={unitHash} />
+            <ParticleInstances maxCount={1500} geometry={smokeGeo} material={smokeMat} particlesRef={smokes} />
+            <ParticleInstances maxCount={1000} geometry={debrisGeo} material={debrisMat} particlesRef={debris} />
+            <ParticleInstances maxCount={200} geometry={expGeo} material={expMat} particlesRef={explosions} />
+            <ParticleInstances maxCount={1500} geometry={flameGeo} material={flameMat} particlesRef={flames} />
             <DecalSystem decals={decals} />
             <SniperLines snipers={snipers} />
             <TracerSystem tracers={tracers} />

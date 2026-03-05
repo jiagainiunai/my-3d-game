@@ -23,7 +23,7 @@ const _up = new THREE.Vector3(0, 1, 0);
 const _vOffset = new THREE.Vector3();
 
 // --- Logic Component ---
-const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire, onDeath, upgrades, obstacles }) => {
+const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire, onDeath, upgrades, obstacles, obstacleHash, unitHash }) => {
     const { id, team, lane } = u;
     const baseStats = UNITS[type] || UNITS.tank; 
     const stats = useMemo(() => ({
@@ -93,17 +93,17 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
             _tempVec.set(0,0,0);
             let sepCount = 0;
 
-            const regEntries = registry.current;
-            const regKeys = Object.keys(regEntries);
-            const aggroRange = 350; 
+            const aggroRange = 100; // Reduced from 350 for better performance, they don't need to see across the map
 
-            for (let ri = 0, rl = regKeys.length; ri < rl; ri++) {
-                const other = regEntries[regKeys[ri]];
+            // Query nearby units using spatial hash
+            const nearbyUnits = unitHash ? unitHash.query(self.pos.x, self.pos.z, aggroRange) : [];
+
+            for (let i = 0; i < nearbyUnits.length; i++) {
+                const other = nearbyUnits[i];
                 if (other.id === id) continue;
+
                 const dx = self.pos.x - other.position.x;
                 const dz = self.pos.z - other.position.z;
-                if (Math.abs(dx) > aggroRange || Math.abs(dz) > aggroRange) continue;
-                
                 const distSq = dx*dx + dz*dz;
                 const sizeSum = stats.size + (other.size || 2);
                 
@@ -119,7 +119,6 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
                 
                 // Target Selection
                 if (other.team !== team) {
-                    // Smart Targeting: Pick closest enemy
                     if (distSq < minDist) {
                         minDist = distSq;
                         target = other;
@@ -127,12 +126,13 @@ const UnitLogicRenderer = ({ u, type, registry, smokes, flames, snipers, onFire,
                 }
             }
 
-            if (obstacles) {
-                for (let oi = 0, ol = obstacles.length; oi < ol; oi++) {
-                    const obs = obstacles[oi];
+            // Query nearby obstacles using spatial hash
+            if (obstacleHash) {
+                const nearbyObs = obstacleHash.query(self.pos.x, self.pos.z, 50);
+                for (let oi = 0, ol = nearbyObs.length; oi < ol; oi++) {
+                    const obs = nearbyObs[oi];
                     const dx = self.pos.x - obs.x;
                     const dz = self.pos.z - obs.z;
-                    if (Math.abs(dx) > 50 && Math.abs(dz) > 50) continue;
                     const distSq = dx*dx + dz*dz;
                     const minD = stats.size + obs.r + 1;
                     if (distSq < minD * minD) {
@@ -332,7 +332,7 @@ const VisualPart = ({ u, registry, offset }) => {
     return <Instance ref={ref} />;
 };
 
-export const UnitGroup = ({ type, units, registry, smokes, flames, snipers, onFire, onDeath, upgrades, obstacles }) => {
+export const UnitGroup = ({ type, units, registry, smokes, flames, snipers, onFire, onDeath, upgrades, obstacles, obstacleHash, unitHash }) => {
     const marineBody = useMemo(() => new THREE.CapsuleGeometry(0.6, 1.5, 4, 8), []);
     const flameBody = useMemo(() => new THREE.CylinderGeometry(1, 1, 2, 8), []);
     const ghostBody = useMemo(() => new THREE.CapsuleGeometry(0.5, 1.8, 4, 8), []);
@@ -348,7 +348,7 @@ export const UnitGroup = ({ type, units, registry, smokes, flames, snipers, onFi
             <Instances range={1000} geometry={type==='tank'?tankBody : type==='artillery'?thorBody : type==='flamebat'?flameBody : type==='ghost'?ghostBody : marineBody} castShadow receiveShadow frustumCulled={false}>
                 <meshStandardMaterial color={type==='ghost'?'#aaa':'#fff'} roughness={0.5} transparent={type==='ghost'} opacity={type==='ghost'?0.3:1} />
                 {units.map(u => (
-                    <UnitLogicRenderer key={u.id} u={u} type={type} registry={registry} smokes={smokes} flames={flames} snipers={snipers} onFire={onFire} onDeath={onDeath} upgrades={upgrades} obstacles={obstacles} />
+                    <UnitLogicRenderer key={u.id} u={u} type={type} registry={registry} smokes={smokes} flames={flames} snipers={snipers} onFire={onFire} onDeath={onDeath} upgrades={upgrades} obstacles={obstacles} obstacleHash={obstacleHash} unitHash={unitHash} />
                 ))}
             </Instances>
 
